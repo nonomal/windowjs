@@ -11,11 +11,12 @@ target_compile_definitions(skia INTERFACE
   WIN32_LEAN_AND_MEAN
   NOMINMAX
   NDEBUG
+  SK_GANESH
   SK_GL
   SK_HAS_JPEG_LIBRARY
-  SK_USE_LIBGIFCODEC
   SK_HAS_PNG_LIBRARY
   SK_HAS_WEBP_LIBRARY
+  SK_USE_LIBGIFCODEC
   SK_XML
 )
 
@@ -28,7 +29,6 @@ if (WIN32)
     Gdi32.dll
     Ole32.dll
     OleAut32.dll
-    OpenGL32.dll
     User32.dll
     Usp10.dll
   )
@@ -50,6 +50,5 @@ else()
     webpdemux
     fontconfig
     freetype
-    GL
   )
 endif()

@@ -1,10 +1,13 @@
 #include "js_api_process.h"
 
+#include <cstdlib>
+
 #include <uv.h>
 
 #include "args.h"
 #include "fail.h"
 #include "file.h"
+#include "platform.h"
 #include "subprocess.h"
 #include "thread.h"
 
@@ -186,8 +189,13 @@ void ProcessApi::Spawn(const v8::FunctionCallbackInfo<v8::Value>& info) {
 
   v8::Local<v8::Object> object =
       api->GetProcessConstructor()->NewInstance(context).ToLocalChecked();
+
   ProcessApi* process = api->GetProcessApi(object);
   ASSERT(process);
+
+  // Hold a reference to this object until the child process quits,
+  // to prevent the GC from destroying it and its Pipe.
+  process->SetStrong();
 
   process->pipe_ = Pipe::Spawn(
       std::move(exe), std::move(args), log,
@@ -236,7 +244,16 @@ void ProcessApi::Exit(const v8::FunctionCallbackInfo<v8::Value>& info) {
     code = info[0].As<v8::Int32>()->Value();
   }
   if (Args().headless || code != 0) {
+    // TODO: this crashes on Github when running tests.
+    // The crash reproes under high contention on debug builds with MSVC.
+    // It's a crash in a destructor at shutdown; using std::quick_exit to
+    // bypass atexit callbacks as a temporary workaround.
+    // https://github.com/windowjs/windowjs/issues/86
+#if defined(WINDOWJS_WIN)
+    std::quick_exit(code);
+#else
     std::exit(code);
+#endif
   } else {
     JsApi* api = JsApi::Get(info.GetIsolate());
     glfwSetWindowShouldClose(api->glfw_window(), GLFW_TRUE);
@@ -349,6 +366,8 @@ void ProcessApi::HandleChildProcessExit(int64_t status, std::string error) {
     api()->js()->ReportException(try_catch.Message());
   }
   pipe_.reset();
+  // No more events will happen to this object, so it can be GCed now.
+  SetWeak();
 }
 
 void ProcessApi::HandleMessageFromParentProcess(uint32_t type,

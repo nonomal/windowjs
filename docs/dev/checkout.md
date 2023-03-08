@@ -33,12 +33,12 @@ These tools must be installed and available in the `PATH` in a terminal.
 **Windows**
 
 *  [Visual Studio 2022](https://visualstudio.microsoft.com/) (Choose the *Desktop development with C++* workflow in the installer)
-*  [Windows 10 SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/) (10.0.19041.0 -- can be installed with Visual Studio 2022)
+*  [Windows 10 SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/) (10.0.22621.0 -- can be installed with Visual Studio 2022)
 
 
 **Linux**
 
-*  `apt-get install cmake clang libfontconfig-dev libjpeg-turbo8-dev libwebp-dev libgl-dev libglx-dev libxrandr-dev xorg-dev`
+*  `apt-get install cmake clang libfontconfig-dev libjpeg-turbo8-dev libwebp-dev libgl-dev libglx-dev libxrandr-dev re2c xorg-dev`
 
 
 **Mac**
@@ -50,7 +50,7 @@ These tools must be installed and available in the `PATH` in a terminal.
 -------------------------
 
 ```shell
-$ git checkout https://github.com/windowjs/windowjs
+$ git clone https://github.com/windowjs/windowjs
 ```
 
 
@@ -84,8 +84,16 @@ $ source libraries/setup_build_env.sh
 
 **Windows**
 
+Command prompt terminals:
+
 ```shell
 $ libraries\sync.bat
+```
+
+Powershell terminals:
+
+```shell
+$ libraries\sync.ps1
 ```
 
 

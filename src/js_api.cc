@@ -26,8 +26,6 @@
 
 namespace {
 
-constexpr uint16_t wrapper_class_id_for_destructors = 12345;
-
 void Now(const v8::FunctionCallbackInfo<v8::Value>& args) {
   args.GetReturnValue().Set(glfwGetTime() * 1000);
 }
@@ -552,6 +550,32 @@ void GetPlatform(v8::Local<v8::Name> property,
 #endif
 }
 
+void GetLazyCanvas(v8::Local<v8::Name> property,
+                   const v8::PropertyCallbackInfo<v8::Value>& info) {
+  ASSERT(IsMainThread());
+
+  v8::Isolate* isolate = info.GetIsolate();
+  JsApi* api = JsApi::Get(isolate);
+
+  v8::Local<v8::Function> constructor =
+      api->GetCanvasRenderingContext2DConstructor();
+
+  v8::Local<v8::Value> args[2] = {
+      v8::Number::New(isolate, api->window()->width()),
+      v8::Number::New(isolate, api->window()->height()),
+  };
+
+  v8::Local<v8::Object> canvas =
+      constructor->NewInstance(api->js()->context(), 2, args).ToLocalChecked();
+
+  CanvasRenderingContext2DApi* canvas_api =
+      api->GetCanvasRenderingContext2DApi(canvas);
+  ASSERT(canvas_api);
+  api->window()->SetWindowCanvas(canvas_api->canvas());
+
+  info.GetReturnValue().Set(canvas);
+}
+
 }  // namespace
 
 JsApi::JsApi(Window* win, Js* js, JsEvents* events, TaskQueue* task_queue,
@@ -689,26 +713,16 @@ JsApi::JsApi(Window* win, Js* js, JsEvents* events, TaskQueue* task_queue,
   canvas_pattern_constructor_.Reset(scope.isolate, canvas_pattern);
   scope.Set(global, StringId::CanvasPattern, canvas_pattern);
 
-  v8::Local<v8::Function> canvas_context =
-      CanvasApi::GetConstructor(this, scope);
-  canvas_rendering_context_2d_constructor_.Reset(scope.isolate, canvas_context);
-  scope.Set(global, StringId::CanvasRenderingContext2D, canvas_context);
+  v8::Local<v8::Function> canvas =
+      CanvasRenderingContext2DApi::GetConstructor(this, scope);
+  canvas_rendering_context_2d_constructor_.Reset(scope.isolate, canvas);
+  scope.Set(global, StringId::CanvasRenderingContext2D, canvas);
 
   v8::Local<v8::Function> path2d = Path2DApi::GetConstructor(this, scope);
   path2d_constructor_.Reset(scope.isolate, path2d);
   scope.Set(global, StringId::Path2D, path2d);
 
-  v8::Local<v8::Value> args[2] = {
-      v8::Number::New(scope.isolate, window_->width()),
-      v8::Number::New(scope.isolate, window_->height()),
-  };
-
-  v8::Local<v8::Object> canvas =
-      canvas_context->NewInstance(scope.context, 2, args).ToLocalChecked();
-  scope.Set(window, StringId::canvas, canvas);
-  CanvasApi* window_canvas = GetCanvasApi(canvas);
-  ASSERT(window_canvas);
-  window_->SetWindowCanvas(window_canvas->canvas());
+  scope.SetLazy(window, StringId::canvas, GetLazyCanvas);
 
   scope.Set(global, StringId::Codec, MakeCodecApi(this, scope));
   scope.Set(global, StringId::File, MakeFileApi(this, scope));
@@ -719,25 +733,11 @@ JsApi::JsApi(Window* win, Js* js, JsEvents* events, TaskQueue* task_queue,
 }
 
 JsApi::~JsApi() {
+  js_->isolate()->SetData(1, nullptr);
   if (cursor_) {
     glfwDestroyCursor(cursor_);
     cursor_ = nullptr;
   }
-  // Delete all of the wrapped C++ objects that weren't cleaned up by GC so far.
-  v8::Locker locker(isolate());
-  v8::HandleScope scope(isolate());
-  isolate()->VisitHandlesWithClassIds(this);
-}
-
-void JsApi::VisitPersistentHandle(v8::Persistent<v8::Value>* value,
-                                  uint16_t class_id) {
-  ASSERT(class_id == wrapper_class_id_for_destructors);
-  v8::Local<v8::Value> v = value->Get(isolate());
-  ASSERT(v->IsObject());
-  v8::Local<v8::Object> o = v.As<v8::Object>();
-  JsApiWrapper* w =
-      static_cast<JsApiWrapper*>(o->GetAlignedPointerFromInternalField(0));
-  delete w;
 }
 
 void* JsApi::GetWrappedInstanceOrThrow(v8::Local<v8::Value> thiz,
@@ -821,9 +821,18 @@ void JsApi::RequestAnimationFrame(
     args.GetReturnValue().Set(-1);
     return;
   }
+
   JsApi* api = JsApi::Get(args.GetIsolate());
-  api->animation_frame_callbacks_.emplace_back(api->isolate(),
-                                               args[0].As<v8::Function>());
+  v8::Local<v8::Function> callback = args[0].As<v8::Function>();
+
+  for (const auto& pending : api->animation_frame_callbacks_) {
+    if (pending == callback) {
+      $(WARN) << "Scheduling the same requestAnimationFrame callback degrades "
+                 "performance";
+    }
+  }
+
+  api->animation_frame_callbacks_.emplace_back(api->isolate(), callback);
   uint32_t id = api->animation_frame_next_id_++;
   args.GetReturnValue().Set(id);
 }
@@ -867,8 +876,7 @@ void JsApi::CallAnimationFrameCallbacks(const JsScope& scope) {
       continue;
     }
 
-    v8::Local<v8::Function> f =
-        v8::Local<v8::Function>::New(scope.isolate, callback);
+    v8::Local<v8::Function> f = callback.Get(scope.isolate);
     IGNORE_RESULT(f->Call(scope.context, scope.context->Global(), 1, args));
 
     if (try_catch.HasCaught()) {
@@ -1219,12 +1227,10 @@ void JsApi::LoadFont(const v8::FunctionCallbackInfo<v8::Value>& args) {
 }
 
 JsApiWrapper::JsApiWrapper(v8::Isolate* isolate, v8::Local<v8::Object> thiz)
-    : api_(JsApi::Get(isolate)) {
+    : isolate_(isolate) {
   thiz->SetAlignedPointerInInternalField(0, this);
   thiz_.Reset(isolate, thiz);
-  thiz_.SetWeak(this, JsApiWrapper::Destructor,
-                v8::WeakCallbackType::kParameter);
-  thiz_.SetWrapperClassId(wrapper_class_id_for_destructors);
+  SetWeak();
 }
 
 // static
@@ -1232,4 +1238,15 @@ void JsApiWrapper::Destructor(const v8::WeakCallbackInfo<JsApiWrapper>& info) {
   // This gets called when the Javascript object gets garbage collected.
   JsApiWrapper* thiz = static_cast<JsApiWrapper*>(info.GetParameter());
   delete thiz;
+}
+
+void JsApiWrapper::SetWeak() {
+  thiz_.SetWeak(this, JsApiWrapper::Destructor,
+                v8::WeakCallbackType::kParameter);
+  ASSERT(thiz_.IsWeak());
+}
+
+void JsApiWrapper::SetStrong() {
+  thiz_.ClearWeak();
+  ASSERT(!thiz_.IsWeak());
 }

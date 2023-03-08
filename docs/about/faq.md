@@ -22,7 +22,9 @@ What does Window.js build on?
   [GLFW](http://glfw.org).
 * The [canvas API](/doc/canvas) is largely built on the
   [Skia graphics library](http://skia.org).
-* Access to the GL API is built on the [GLAD library](https://glad.dav1d.de/).
+* Access to native graphics is performed via the EGL and OpenGL ES 3.0 APIs
+  provided by [ANGLE](https://github.com/google/angle). Windows uses the
+  Direct3D 11 backend; macOS and Linux use desktop GL.
 * [Subprocesses and IPC](/doc/process) is built on [libuv](http://libuv.org).
 * Window.js itself is mostly written in C++17. The build system is
   [CMake](http://cmake.org).
@@ -259,3 +261,13 @@ and has more APIs for desktop integration.
 
 There is [experimental support](/about/processing) to run p5.js scripts in
 Window.js.
+
+
+Does Window.js run on Windows Subsystem for Linux (WSL)?
+--------------------------------------------------------
+
+Yes! Use an X server like [VcXsrv](https://sourceforge.net/projects/vcxsrv/)
+and make sure to have Mesa version 23 or later installed, to support GLES3.
+
+When using VcXsrv, disable `Native opengl` and don't set
+`LIBGL_ALWAYS_INDIRECT`.

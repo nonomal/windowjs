@@ -13,7 +13,7 @@ The cmake build must be configured before building.
 See [here](/dev/build#configuring-windowjs).
 
 
-###### CMake Error at libraries/CMakeLists.txt:9 (add_subdirectory): add_subdirectory given source "glad" which is not an existing directory.
+###### CMake Error at libraries/CMakeLists.txt:9 (add_subdirectory): add_subdirectory given source "angle" which is not an existing directory.
 
 The Window.js dependencies must be fetched before the build.
 See [here](/dev/checkout#4-fetching-the-dependencies).
@@ -41,3 +41,11 @@ list of Windows Defender:
 *  Open "Manage Settings" under "Virus & threat protection settings"
 *  Open "Add or remove exclusions" under "Exclusions"
 *  Click on "Add an exclusion" to add the `windowjs` checkout directory.
+
+
+###### glfwCreateWindow failed (65543): EGL: Failed to create context: Arguments are inconsistent
+
+This happens if the native platform doesn't support OpenGL ES 3. It might happen
+when running the Linux version on WSL on Windows.
+
+Make sure the Mesa drivers are updated to version 23 or later.

@@ -7,6 +7,7 @@ if(MSVC)
   add_compile_options(-WX)
 
   # Disable RTTI.
+  string(REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
   add_compile_options(/GR-)
 
   if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -84,6 +85,8 @@ configure_file(version.cc.in generated_version.cc)
 add_library(windowjs-library STATIC
     args.cc
     args.h
+    canvas.cc
+    canvas.h
     config.h
     console.cc
     console.h
@@ -117,8 +120,6 @@ add_library(windowjs-library STATIC
     main.cc
     main.h
     platform.h
-    render_canvas.cc
-    render_canvas.h
     signal.h
     stats.cc
     stats.h
@@ -144,7 +145,7 @@ add_executable(windowjs
 )
 
 target_include_directories(windowjs-library PRIVATE ../libraries/v8/third_party/zlib)
-target_link_libraries(windowjs-library PRIVATE glad glfw skia uv_a v8)
+target_link_libraries(windowjs-library PRIVATE glfw skia uv_a v8 angle)
 target_link_libraries(windowjs PRIVATE windowjs-library)
 
 if(MSVC)

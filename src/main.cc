@@ -4,6 +4,8 @@
 #include <iostream>
 #include <memory>
 
+#include <skia/include/core/SkEncodedImageFormat.h>
+
 #include "args.h"
 #include "fail.h"
 #include "file.h"
@@ -267,7 +269,7 @@ void Main::GcThread() {
     }
     v8::Locker locker(js_->isolate());
     js_->isolate()->IdleNotificationDeadline(Js::MonotonicallyIncreasingTime() +
-                                             0.01);
+                                             0.001);
   }
 }
 

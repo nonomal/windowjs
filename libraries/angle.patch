@@ -1,0 +1,392 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index 8da4a02ce..9aa88b8a0 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1591,6 +1591,8 @@ if (angle_enable_vulkan) {
+ }
+ 
+ libEGL_template("libEGL_static") {
++  complete_static_lib = true
++  suppressed_configs = [ "//build/config/compiler:thin_archive" ]
+   target_type = "angle_static_library"
+   public_configs = [ ":angle_static_config" ]
+   deps = [ ":libGLESv2_static" ]
+diff --git a/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp b/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp
+index cd3ac2024..1d587d056 100644
+--- a/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp
++++ b/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp
+@@ -977,7 +977,10 @@ egl::Error Renderer11::initializeD3DDevice()
+ 
+ void Renderer11::setGlobalDebugAnnotator()
+ {
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wexit-time-destructors"
+     static std::mutex gMutex;
++#pragma clang diagnostic pop
+     static angle::base::NoDestructor<DebugAnnotator11> gGlobalAnnotator;
+ 
+     std::lock_guard<std::mutex> lg(gMutex);
+diff --git a/src/libANGLE/renderer/d3d/d3d11/SwapChain11.cpp b/src/libANGLE/renderer/d3d/d3d11/SwapChain11.cpp
+index 8470510ea..3bdff9dbd 100644
+--- a/src/libANGLE/renderer/d3d/d3d11/SwapChain11.cpp
++++ b/src/libANGLE/renderer/d3d/d3d11/SwapChain11.cpp
+@@ -371,7 +371,8 @@ EGLint SwapChain11::resetOffscreenColorBuffer(DisplayD3D *displayD3D,
+ 
+         if (mSwapChain)
+         {
+-            swapRect(displayD3D, 0, 0, backbufferWidth, backbufferHeight);
++            // This causes invalid draws during resizes:
++            // swapRect(displayD3D, 0, 0, backbufferWidth, backbufferHeight);
+         }
+     }
+ 
+diff --git a/src/libANGLE/renderer/gl/cgl/DisplayCGL.mm b/src/libANGLE/renderer/gl/cgl/DisplayCGL.mm
+index b1a6b0fc6..f262dd7c5 100644
+--- a/src/libANGLE/renderer/gl/cgl/DisplayCGL.mm
++++ b/src/libANGLE/renderer/gl/cgl/DisplayCGL.mm
+@@ -335,11 +335,19 @@ egl::Error DisplayCGL::makeCurrent(egl::Display *display,
+     return DisplayGL::makeCurrent(display, drawSurface, readSurface, context);
+ }
+ 
++static WindowSurfaceCGL* singleton_surface = nullptr;
++
+ SurfaceImpl *DisplayCGL::createWindowSurface(const egl::SurfaceState &state,
+                                              EGLNativeWindowType window,
+                                              const egl::AttributeMap &attribs)
+ {
+-    return new WindowSurfaceCGL(state, mRenderer.get(), window, mContext);
++    if (singleton_surface)
++    {
++        fprintf(stderr, "TODO: only one surface is supported.\n");
++        abort();
++    }
++    singleton_surface = new WindowSurfaceCGL(state, mRenderer.get(), window, mContext, mPixelFormat);
++    return singleton_surface;
+ }
+ 
+ SurfaceImpl *DisplayCGL::createPbufferSurface(const egl::SurfaceState &state,
+@@ -442,7 +450,7 @@ egl::ConfigSet DisplayCGL::generateConfigs()
+ 
+     config.surfaceType = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
+ 
+-    config.minSwapInterval = 1;
++    config.minSwapInterval = 0;
+     config.maxSwapInterval = 1;
+ 
+     config.renderTargetFormat = GL_RGBA8;
+@@ -526,7 +534,10 @@ void DisplayCGL::generateCaps(egl::Caps *outCaps) const
+ 
+ egl::Error DisplayCGL::waitClient(const gl::Context *context)
+ {
+-    // TODO(cwallez) UNIMPLEMENTED()
++    if (singleton_surface)
++    {
++        singleton_surface->waitClient(context);
++    }
+     return egl::NoError();
+ }
+ 
+diff --git a/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.h b/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.h
+index b4aa28673..62dca6179 100644
+--- a/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.h
++++ b/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.h
+@@ -13,9 +13,13 @@
+ 
+ struct _CGLContextObject;
+ typedef _CGLContextObject *CGLContextObj;
++struct _CGLPixelFormatObject;
++typedef _CGLPixelFormatObject *CGLPixelFormatObj;
+ @class CALayer;
+ struct __IOSurface;
+ typedef __IOSurface *IOSurfaceRef;
++struct __CVDisplayLink;
++typedef struct __CVDisplayLink *CVDisplayLinkRef;
+ 
+ #ifdef ANGLE_OUTSIDE_WEBKIT
+ // Avoid collisions with the system's WebKit.framework.
+@@ -63,12 +67,17 @@ class WindowSurfaceCGL : public SurfaceGL
+     WindowSurfaceCGL(const egl::SurfaceState &state,
+                      RendererGL *renderer,
+                      EGLNativeWindowType layer,
+-                     CGLContextObj context);
++                     CGLContextObj context,
++                     CGLPixelFormatObj pixelFormat);
+     ~WindowSurfaceCGL() override;
+ 
+     egl::Error initialize(const egl::Display *display) override;
+     egl::Error makeCurrent(const gl::Context *context) override;
+ 
++    void waitClient(const gl::Context *context);
++    void onVsync();
++    void waitForVsync();
++
+     egl::Error swap(const gl::Context *context) override;
+     egl::Error postSubBuffer(const gl::Context *context,
+                              EGLint x,
+@@ -102,13 +111,21 @@ class WindowSurfaceCGL : public SurfaceGL
+     SharedSwapState mSwapState;
+     uint64_t mCurrentSwapId;
+ 
++    pthread_mutex_t mSwapMutex;
++    pthread_cond_t mSwapCond;
++    int mSwapInterval;
++    int mSwaps;
++
+     CALayer *mLayer;
+     CGLContextObj mContext;
++    CGLPixelFormatObj mPixelFormat;
+     const FunctionsGL *mFunctions;
+     StateManagerGL *mStateManager;
+ 
+     GLuint mDSRenderbuffer;
+     GLuint mFramebufferID;
++
++    CVDisplayLinkRef mDisplayLink;
+ };
+ 
+ }  // namespace rx
+diff --git a/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.mm b/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.mm
+index b10af4e9e..35afeb893 100644
+--- a/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.mm
++++ b/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.mm
+@@ -38,10 +38,15 @@
+     const rx::FunctionsGL *mFunctions;
+ 
+     GLuint mReadFramebuffer;
++
++    int width;
++    int height;
+ }
+ - (id)initWithSharedState:(rx::SharedSwapState *)swapState
+               withContext:(CGLContextObj)displayContext
+             withFunctions:(const rx::FunctionsGL *)functions;
++
++- (void)waitClient:(int)width h:(int)height;
+ @end
+ 
+ @implementation SWAP_CGL_LAYER_NAME
+@@ -120,13 +125,6 @@
+     }
+ 
+     const auto &texture = *mSwapState->beingPresented;
+-    if ([self frame].size.width != texture.width || [self frame].size.height != texture.height)
+-    {
+-        [self setFrame:CGRectMake(0, 0, texture.width, texture.height)];
+-
+-        // Without this, the OSX compositor / window system doesn't see the resize.
+-        [self setNeedsDisplay];
+-    }
+ 
+     // TODO(cwallez) support 2.1 contexts too that don't have blitFramebuffer nor the
+     // GL_DRAW_FRAMEBUFFER_BINDING query
+@@ -148,6 +146,25 @@
+                forLayerTime:timeInterval
+                 displayTime:timeStamp];
+ }
++
++- (void)waitClient:(int)w h:(int)h
++{
++  if (width == w && height == h) {
++    return;
++  }
++
++  width = w;
++  height = h;
++
++  [CATransaction begin];
++  [CATransaction setValue:(id)kCFBooleanTrue
++                   forKey:kCATransactionDisableActions];
++  [self setFrame:CGRectMake(0, 0, w, h)];
++  [CATransaction commit];
++
++  // Without this, the OSX compositor / window system doesn't see the resize.
++  [self setNeedsDisplay];
++}
+ @end
+ 
+ namespace rx
+@@ -156,18 +173,25 @@ namespace rx
+ WindowSurfaceCGL::WindowSurfaceCGL(const egl::SurfaceState &state,
+                                    RendererGL *renderer,
+                                    EGLNativeWindowType layer,
+-                                   CGLContextObj context)
++                                   CGLContextObj context,
++                                   CGLPixelFormatObj pixelFormat)
+     : SurfaceGL(state),
+       mSwapLayer(nil),
+       mCurrentSwapId(0),
++      mSwapInterval(0),
++      mSwaps(0),
+       mLayer((__bridge CALayer *)layer),
+       mContext(context),
++      mPixelFormat(pixelFormat),
+       mFunctions(renderer->getFunctions()),
+       mStateManager(renderer->getStateManager()),
+       mDSRenderbuffer(0),
+-      mFramebufferID(0)
++      mFramebufferID(0),
++      mDisplayLink(nullptr)
+ {
+     pthread_mutex_init(&mSwapState.mutex, nullptr);
++    pthread_mutex_init(&mSwapMutex, nullptr);
++    pthread_cond_init(&mSwapCond, nullptr);
+ }
+ 
+ WindowSurfaceCGL::~WindowSurfaceCGL()
+@@ -203,6 +227,56 @@ WindowSurfaceCGL::~WindowSurfaceCGL()
+             mSwapState.textures[i].texture = 0;
+         }
+     }
++
++    CVDisplayLinkRelease(mDisplayLink);
++    pthread_mutex_destroy(&mSwapMutex);
++    pthread_cond_destroy(&mSwapCond);
++}
++
++void WindowSurfaceCGL::waitClient(const gl::Context *context) {
++  unsigned width = getWidth();
++  unsigned height = getHeight();
++
++  if (mSwapLayer != nil) {
++    [mSwapLayer waitClient:width h:height];
++  }
++
++  const FunctionsGL *functions = mFunctions;
++  StateManagerGL *stateManager = mStateManager;
++
++  pthread_mutex_lock(&mSwapState.mutex);
++
++  for (int i = 0; i < 3; i++) {
++    auto &texture = mSwapState.textures[i];
++
++    if (texture.width == width && texture.height == height) {
++      continue;
++    }
++
++    stateManager->bindTexture(gl::TextureType::_2D, texture.texture);
++    functions->texImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
++                          GL_UNSIGNED_BYTE, nullptr);
++
++    stateManager->bindRenderbuffer(GL_RENDERBUFFER, mDSRenderbuffer);
++    functions->renderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
++
++    texture.width  = width;
++    texture.height = height;
++  }
++
++  pthread_mutex_unlock(&mSwapState.mutex);
++}
++
++static CVReturn DisplayLinkCallback(
++    CVDisplayLinkRef displayLink,
++    const CVTimeStamp* now,
++    const CVTimeStamp* outputTime,
++    CVOptionFlags flagsIn,
++    CVOptionFlags* flagsOut,
++    void* displayLinkContext)
++{
++    static_cast<WindowSurfaceCGL*>(displayLinkContext)->onVsync();
++    return kCVReturnSuccess;
+ }
+ 
+ egl::Error WindowSurfaceCGL::initialize(const egl::Display *display)
+@@ -236,6 +310,22 @@ egl::Error WindowSurfaceCGL::initialize(const egl::Display *display)
+     mStateManager->bindRenderbuffer(GL_RENDERBUFFER, mDSRenderbuffer);
+     mFunctions->renderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+ 
++    if (CVDisplayLinkCreateWithActiveCGDisplays(&mDisplayLink) != 0) {
++        return egl::EglNotInitialized() << "CVDisplayLinkCreateWithActiveCGDisplays failed.";
++    }
++
++    if (CVDisplayLinkSetOutputCallback(mDisplayLink, &DisplayLinkCallback, this) != 0) {
++        return egl::EglNotInitialized() << "CVDisplayLinkSetOutputCallback failed.";
++    }
++
++    if (CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(mDisplayLink, mContext, mPixelFormat) != 0) {
++        return egl::EglNotInitialized() << "CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext failed.";
++    }
++
++    if (CVDisplayLinkStart(mDisplayLink) != 0) {
++        return egl::EglNotInitialized() << "CVDisplayLinkStart failed.";
++    }
++
+     return egl::Error(EGL_SUCCESS);
+ }
+ 
+@@ -244,6 +334,24 @@ egl::Error WindowSurfaceCGL::makeCurrent(const gl::Context *context)
+     return egl::Error(EGL_SUCCESS);
+ }
+ 
++void WindowSurfaceCGL::onVsync()
++{
++    pthread_mutex_lock(&mSwapMutex);
++    mSwaps++;
++    pthread_cond_signal(&mSwapCond);
++    pthread_mutex_unlock(&mSwapMutex);
++}
++
++void WindowSurfaceCGL::waitForVsync()
++{
++    pthread_mutex_lock(&mSwapMutex);
++    while (mSwaps < mSwapInterval) {
++        pthread_cond_wait(&mSwapCond, &mSwapMutex);
++    }
++    mSwaps = 0;
++    pthread_mutex_unlock(&mSwapMutex);
++}
++
+ egl::Error WindowSurfaceCGL::swap(const gl::Context *context)
+ {
+     const FunctionsGL *functions = GetFunctionsGL(context);
+@@ -258,29 +366,23 @@ egl::Error WindowSurfaceCGL::swap(const gl::Context *context)
+     }
+     pthread_mutex_unlock(&mSwapState.mutex);
+ 
+-    unsigned width  = getWidth();
+-    unsigned height = getHeight();
+-    auto &texture   = *mSwapState.beingRendered;
+-
+-    if (texture.width != width || texture.height != height)
+-    {
+-        stateManager->bindTexture(gl::TextureType::_2D, texture.texture);
+-        functions->texImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
+-                              GL_UNSIGNED_BYTE, nullptr);
+-
+-        stateManager->bindRenderbuffer(GL_RENDERBUFFER, mDSRenderbuffer);
+-        functions->renderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+-
+-        texture.width  = width;
+-        texture.height = height;
+-    }
+-
+     ASSERT(mFramebufferID ==
+            GetImplAs<FramebufferGL>(context->getFramebuffer({0}))->getFramebufferID());
+     stateManager->bindFramebuffer(GL_FRAMEBUFFER, mFramebufferID);
+     functions->framebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                     mSwapState.beingRendered->texture, 0);
+ 
++    // Fixes red borders during resizes.
++    if (mSwapInterval == 0) {
++      // No vsync: draw now to avoid red bands.
++      [mSwapLayer displayIfNeeded];
++    } else {
++      // Vsync: draw once vsync comes later.
++      [mSwapLayer setNeedsDisplay];
++    }
++
++    waitForVsync();
++
+     return egl::Error(EGL_SUCCESS);
+ }
+ 
+@@ -316,7 +418,9 @@ egl::Error WindowSurfaceCGL::releaseTexImage(const gl::Context *context, EGLint
+ 
+ void WindowSurfaceCGL::setSwapInterval(EGLint interval)
+ {
+-    // TODO(cwallez) investigate implementing swap intervals other than 0
++    pthread_mutex_lock(&mSwapMutex);
++    mSwapInterval = interval;
++    pthread_mutex_unlock(&mSwapMutex);
+ }
+ 
+ EGLint WindowSurfaceCGL::getWidth() const

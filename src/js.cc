@@ -74,6 +74,11 @@ v8::Local<v8::Message> MakeErrorMessage(v8::Isolate* isolate,
 
 // static
 void Js::Init(const char* program) {
+#if !defined(WINDOWJS_RELEASE_BUILD)
+  // Enables calling RequestGarbageCollectionForTesting to catch memory leaks
+  // at shutdown.
+  v8::V8::SetFlagsFromString("--expose_gc");
+#endif
   platform = v8::platform::NewDefaultPlatform().release();
   ASSERT(v8::V8::InitializeICUDefaultLocation(program));
   v8::V8::InitializeExternalStartupData(program);
@@ -84,7 +89,7 @@ void Js::Init(const char* program) {
 // static
 void Js::Shutdown() {
   v8::V8::Dispose();
-  v8::V8::ShutdownPlatform();
+  v8::V8::DisposePlatform();
   delete platform;
 }
 
@@ -135,10 +140,15 @@ Js::Js(Delegate* delegate, std::filesystem::path base_path,
 }
 
 Js::~Js() {
+  isolate_->SetData(0, nullptr);
   strings_.reset();
   dynamic_imports_.clear();
   modules_.clear();
   context_.Reset();
+#if !defined(WINDOWJS_RELEASE_BUILD)
+  isolate_->RequestGarbageCollectionForTesting(
+      v8::Isolate::kFullGarbageCollection);
+#endif
   isolate_->Dispose();
   delete allocator_;
 }
@@ -552,15 +562,15 @@ void Js::OnDynamicModuleFailure(
 
 // static
 v8::MaybeLocal<v8::Promise> Js::ImportDynamic(
-    v8::Local<v8::Context> context, v8::Local<v8::ScriptOrModule> referrer,
-    v8::Local<v8::String> specifier,
+    v8::Local<v8::Context> context, v8::Local<v8::Data> host_defined_options,
+    v8::Local<v8::Value> resource_name, v8::Local<v8::String> specifier,
     v8::Local<v8::FixedArray> import_assertions) {
   Js* js = Js::Get(context->GetIsolate());
-  return js->ImportDynamic(referrer, specifier);
+  return js->ImportDynamic(resource_name, specifier);
 }
 
 v8::MaybeLocal<v8::Promise> Js::ImportDynamic(
-    v8::Local<v8::ScriptOrModule> referrer, v8::Local<v8::String> specifier) {
+    v8::Local<v8::Value> resource_name, v8::Local<v8::String> specifier) {
   v8::MaybeLocal<v8::Promise::Resolver> maybe_resolver =
       v8::Promise::Resolver::New(context());
   v8::Local<v8::Promise::Resolver> resolver;
@@ -568,8 +578,8 @@ v8::MaybeLocal<v8::Promise> Js::ImportDynamic(
     return {};
   }
 
-  ASSERT(referrer->GetResourceName()->IsString());
-  std::string ref = ToString(referrer->GetResourceName());
+  ASSERT(resource_name->IsString());
+  std::string ref = ToString(resource_name);
   std::string spec = ToString(specifier);
 
   if (!IsValidImport(spec)) {

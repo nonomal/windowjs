@@ -1,46 +1,42 @@
-#include "render_canvas.h"
+#include "canvas.h"
 
-// Must come before glfw3.h.
-#include <glad/glad.h>
-// Comes after glad.h.
+#include <GLES3/gl3.h>
 #include <GLFW/glfw3.h>
+#include <skia/include/core/SkColorSpace.h>
+#include <skia/include/gpu/gl/egl/GrGLMakeEGLInterface.h>
 
 #include "args.h"
 #include "console.h"
 #include "fail.h"
 #include "window.h"
 
-RenderCanvasSharedContext::RenderCanvasSharedContext(Window* window)
-    : owner_(window) {
+CanvasSharedContext::CanvasSharedContext(Window* window) : owner_(window) {
   static bool first_render_context = true;
   if (Args().profile_startup && first_render_context) {
-    $(DEV) << "[profile-startup] create RenderCanvasSharedContext start: "
+    $(DEV) << "[profile-startup] create CanvasSharedContext start: "
            << glfwGetTime();
   }
 
-  gr_interface_ = GrGLMakeNativeInterface();
+  gr_interface_ = GrGLMakeEGLInterface();
   ASSERT(gr_interface_);
   gr_context_ = GrDirectContext::MakeGL(gr_interface_);
   ASSERT(gr_context_);
 
   if (Args().profile_startup && first_render_context) {
     first_render_context = false;
-    $(DEV) << "[profile-startup] create RenderCanvasSharedContext end: "
+    $(DEV) << "[profile-startup] create CanvasSharedContext end: "
            << glfwGetTime();
   }
 }
 
-RenderCanvasSharedContext::~RenderCanvasSharedContext() {}
+CanvasSharedContext::~CanvasSharedContext() {}
 
-void RenderCanvasSharedContext::Flush() {
-  gr_context_->flushAndSubmit();
-  // TODO: is this still needed?
-  // flushAndSubmit doesn't call glFlush; this causes rendering issues on MacOS.
-  glFlush();
+void CanvasSharedContext::Flush() {
+  gr_context_->flush();
 }
 
-RenderCanvas::RenderCanvas(RenderCanvasSharedContext* shared_context, int width,
-                           int height, Target target)
+Canvas::Canvas(CanvasSharedContext* shared_context, int width, int height,
+               Target target)
     : shared_context_(shared_context),
       width_(-1),
       height_(-1),
@@ -48,26 +44,27 @@ RenderCanvas::RenderCanvas(RenderCanvasSharedContext* shared_context, int width,
   Resize(width, height);
 }
 
-RenderCanvas::~RenderCanvas() {
+Canvas::~Canvas() {
   surface_.reset();
   if (texture_.isValid()) {
     shared_context_->skia_context()->deleteBackendTexture(texture_);
   }
 }
 
-void RenderCanvas::Reset() {
+void Canvas::Reset() {
   SkCanvas* canvas = surface_->getCanvas();
   canvas->resetMatrix();
   canvas->clear(SK_ColorBLACK);
 }
 
-void RenderCanvas::Resize(int width, int height) {
+void Canvas::Resize(int width, int height) {
   if (width == width_ && height == height_) {
     return;
   }
 
   const SkColorType color_type = kRGBA_8888_SkColorType;
   // TODO: consider using 1, 2 or 4 sample_counts.
+  // See also the GLFW_SAMPLES hint.
   const int sample_count = 0;
 
   std::vector<SkM44> transforms;
@@ -115,9 +112,6 @@ void RenderCanvas::Resize(int width, int height) {
       surface_->draw(surface->getCanvas(), 0, 0);
       // Nothing gets drawn before the texture is deleted without this flush:
       surface_->flush();
-      // Workaround for examples/p5/image-copy-method.js; it blits a corrupted
-      // image without this reset. Why?
-      shared_context_->skia_context()->resetContext(kView_GrGLBackendState);
 
       surface_.reset();
       shared_context_->skia_context()->deleteBackendTexture(texture_);
@@ -144,13 +138,13 @@ void RenderCanvas::Resize(int width, int height) {
   height_ = height;
 }
 
-sk_sp<SkImage> RenderCanvas::MakeImageSnapshot() {
+sk_sp<SkImage> Canvas::MakeImageSnapshot() {
   shared_context_->Flush();
   return surface_->makeImageSnapshot();
 }
 
-void RenderCanvas::ReadPixels(int x, int y, int width, int height,
-                              void* destination) {
+void Canvas::ReadPixels(int x, int y, int width, int height,
+                        void* destination) {
   ASSERT(x >= 0);
   ASSERT(y >= 0);
   ASSERT(x + width <= width_);
@@ -165,8 +159,8 @@ void RenderCanvas::ReadPixels(int x, int y, int width, int height,
   ASSERT(result);
 }
 
-void RenderCanvas::WritePixels(const void* pixels, int x, int y, int width,
-                               int height, int row_stride) {
+void Canvas::WritePixels(const void* pixels, int x, int y, int width,
+                         int height, int row_stride) {
   SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType,
                                        kUnpremul_SkAlphaType);
   SkPixmap pixmap{info, pixels, (size_t) row_stride};

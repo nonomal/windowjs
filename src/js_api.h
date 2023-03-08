@@ -15,16 +15,17 @@
 #include "weak.h"
 #include "window.h"
 
-class CanvasApi;
 class CanvasGradientApi;
 class CanvasPatternApi;
+class CanvasRenderingContext2DApi;
 class ImageBitmapApi;
 class ImageDataApi;
 class Path2DApi;
 class ProcessApi;
 class SkTypeface;
 
-class JsApi final : public v8::PersistentHandleVisitor {
+// Custom APIs added to v8 by Window.js.
+class JsApi final {
  public:
   // All of these dependencies must outlive JsApi.
   // If the JsApi is deleted, then TaskQueue must *not* run any pending tasks
@@ -40,8 +41,8 @@ class JsApi final : public v8::PersistentHandleVisitor {
   TaskQueue* task_queue() const { return task_queue_; }
   ThreadPoolTaskQueue* background_queue() const { return background_queue_; }
   ProcessApi* parent_process() const { return parent_process_; }
-  RenderCanvas* window_canvas() const { return window_->canvas(); }
-  RenderCanvasSharedContext* canvas_shared_context() const {
+  Canvas* window_canvas() const { return window_->canvas(); }
+  CanvasSharedContext* canvas_shared_context() const {
     return window_->shared_context();
   }
 
@@ -106,8 +107,9 @@ class JsApi final : public v8::PersistentHandleVisitor {
     return canvas_rendering_context_2d_constructor_.Get(js_->isolate());
   }
 
-  CanvasApi* GetCanvasApi(v8::Local<v8::Value> thiz) {
-    return GetWrappedInstanceOrThrow<CanvasApi>(
+  CanvasRenderingContext2DApi* GetCanvasRenderingContext2DApi(
+      v8::Local<v8::Value> thiz) {
+    return GetWrappedInstanceOrThrow<CanvasRenderingContext2DApi>(
         thiz, GetCanvasRenderingContext2DConstructor());
   }
 
@@ -172,9 +174,6 @@ class JsApi final : public v8::PersistentHandleVisitor {
 
   void* GetWrappedInstanceOrThrow(v8::Local<v8::Value> thiz,
                                   v8::Local<v8::Function> constructor);
-
-  void VisitPersistentHandle(v8::Persistent<v8::Value>* value,
-                             uint16_t class_id) override;
 
   static void SetTimeout(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void ClearTimeout(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -264,17 +263,26 @@ class JsApiWrapper {
   JsApiWrapper(v8::Isolate* isolate, v8::Local<v8::Object> thiz);
   virtual ~JsApiWrapper() {}
 
-  JsApi* api() const { return api_; }
-  Js* js() const { return api_->js(); }
+  v8::Isolate* isolate() const { return isolate_; }
+  JsApi* api() const { return JsApi::Get(isolate_); }
+  Js* js() const { return Js::Get(isolate_); }
 
   v8::Local<v8::String> GetConstantString(StringId id) const {
-    return api_->js()->GetConstantString(id);
+    return js()->GetConstantString(id);
   }
+
+  // Makes this a weak reference, so that the object can get garbage collected.
+  // This is the default for new JsApiWrapper instances.
+  void SetWeak();
+
+  // Makes this a strong reference, so that the Javascript object won't get
+  // garbage-collected until this becomes weak.
+  void SetStrong();
 
  private:
   static void Destructor(const v8::WeakCallbackInfo<JsApiWrapper>& info);
 
-  JsApi* api_;
+  v8::Isolate* isolate_;
   v8::Global<v8::Object> thiz_;
 };
 

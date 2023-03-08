@@ -11,19 +11,22 @@
 #include <skia/include/core/SkShader.h>
 #include <v8/include/v8.h>
 
+#include "canvas.h"
 #include "js_api.h"
 #include "js_scope.h"
-#include "render_canvas.h"
 
 class CanvasGradientApi;
 class CanvasPatternApi;
 
-class CanvasApi final : public JsApiWrapper, public JsApiTracker<CanvasApi> {
+class CanvasRenderingContext2DApi final
+    : public JsApiWrapper,
+      public JsApiTracker<CanvasRenderingContext2DApi> {
  public:
-  CanvasApi(JsApi* api, v8::Local<v8::Object> thiz, int width, int height);
-  ~CanvasApi() override;
+  CanvasRenderingContext2DApi(JsApi* api, v8::Local<v8::Object> thiz, int width,
+                              int height);
+  ~CanvasRenderingContext2DApi() override;
 
-  RenderCanvas* canvas() const { return canvas_.get(); }
+  Canvas* canvas() const { return canvas_.get(); }
   SkCanvas* skia_canvas() const { return canvas_->canvas(); }
 
   void OnGradientUpdated(CanvasGradientApi* gradient);
@@ -151,7 +154,7 @@ class CanvasApi final : public JsApiWrapper, public JsApiTracker<CanvasApi> {
       const v8::PropertyCallbackInfo<void>& info);
   void UpdateImageSmoothing();
   static void DrawText(const v8::FunctionCallbackInfo<v8::Value>& info,
-                       const SkPaint& paint, CanvasApi* api);
+                       const SkPaint& paint, CanvasRenderingContext2DApi* api);
   static void FillText(const v8::FunctionCallbackInfo<v8::Value>& info);
   static void StrokeText(const v8::FunctionCallbackInfo<v8::Value>& info);
   static void MeasureText(const v8::FunctionCallbackInfo<v8::Value>& info);
@@ -195,7 +198,7 @@ class CanvasApi final : public JsApiWrapper, public JsApiTracker<CanvasApi> {
   static void Encode(const v8::FunctionCallbackInfo<v8::Value>& info);
   static void DrawImage(const v8::FunctionCallbackInfo<v8::Value>& info);
 
-  std::unique_ptr<RenderCanvas> canvas_;
+  std::unique_ptr<Canvas> canvas_;
   int64_t allocated_in_bytes_;
 
   SkPath path_;
@@ -251,8 +254,13 @@ class CanvasGradientApi final : public JsApiWrapper {
  private:
   static void AddColorStop(const v8::FunctionCallbackInfo<v8::Value>& info);
 
+  enum GradientType {
+    kLinear,
+    kRadial,
+  };
+
   sk_sp<SkShader> shader_;
-  SkShader::GradientType type_;
+  GradientType type_;
   std::vector<float> params_;
   std::vector<SkColor> colors_;
   std::vector<SkScalar> positions_;

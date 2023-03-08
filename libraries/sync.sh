@@ -5,10 +5,10 @@ echo
 echo "Fetching dependencies (this may take a long time, the first time)"
 echo
 echo
-gclient sync --shallow --no-history -D -R
+gclient sync --shallow --no-history -D -R --force
 
 if [ $? -ne 0 ]; then
-  echo.
+  echo
   echo FAILED
   exit 1
 fi
